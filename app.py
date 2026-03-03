@@ -29,15 +29,16 @@ def load_history():
             return json.load(f)
     return []
 
-def save_history(agenda, keywords, result):
+def save_history(agenda, keywords, product_types, result):
     history = load_history()
     new_entry = {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "agenda": agenda,
         "keywords": keywords,
+        "types": ", ".join(product_types), # 💡 어떤 카테고리를 선택했는지도 저장!
         "result": result
     }
-    history.insert(0, new_entry) # 최신 글을 맨 위로!
+    history.insert(0, new_entry)
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
@@ -46,7 +47,6 @@ def save_history(agenda, keywords, result):
 # ==========================================
 st.set_page_config(page_title="글로벌 트렌드 기획 레이더", page_icon="🌎", layout="wide")
 
-# 👉 요청 3: 사이드바에 엑셀 업로드 가이드 상세 추가
 with st.sidebar:
     st.markdown("### 📸 인스타그램 엑셀 업로드")
     st.info("""
@@ -59,22 +59,19 @@ with st.sidebar:
     """)
     uploaded_file = st.file_uploader("여기에 엑셀 파일을 드래그하세요", type=['xlsx'])
 
-# 👉 요청 1: 제목 폰트 부담스럽지 않게 축소 (h2 태그 활용)
 st.markdown("## 🌎 데이터 기반 여행 상품 기획안 자동 생성기")
-st.markdown("수집된 데이터를 바탕으로 숨겨진 **'핵심 타겟(페르소나)'**을 찾아내고, **패키지/에어텔/현지투어** 맞춤형 기획안을 제안합니다.")
+st.markdown("수집된 데이터를 바탕으로 숨겨진 **'핵심 타겟(페르소나)'**을 찾아내고, **원하시는 카테고리**에 맞춘 기획안을 제안합니다.")
 
-# 👉 요청 2: 데이터 수집 기준 및 로직 안내 (아코디언 메뉴로 깔끔하게 숨김)
 with st.expander("ℹ️ AI 트렌드 레이더 데이터 수집 기준 및 로직 안내 (클릭하여 확인)"):
     st.markdown("""
     본 기획안은 아래의 실시간 데이터를 기반으로 AI(Gemini 2.5 Flash)가 분석 및 생성합니다.
     * **🟢 네이버 블로그:** 입력 키워드당 상위 **10개** (정확도순) 게시물 본문 및 링크 수집
     * **🔴 유튜브:** 입력 키워드당 상위 **5개** (관련성순) 영상 제목, 설명, 링크 수집
-    * **🟣 인스타그램 (자동):** 키워드당 최신 게시물 최대 10개 탐색 및 이미지 수집 (단, 인스타 보안 정책으로 누락될 수 있음)
+    * **🟣 인스타그램 (자동):** 키워드당 최신 게시물 최대 10개 탐색 및 이미지 수집
     * **🟣 인스타그램 (수동 엑셀):** 좌측 엑셀 업로드 시, **'좋아요 수(likesCount)'가 가장 높은 상위 10개 게시물**을 1순위로 완벽 반영
     * **🧠 기획안 생성 로직:** 수집된 팩트(링크)를 조합하여 타겟의 니즈를 도출하고, 이를 해결할 상품 셀링 포인트를 역제안합니다.
     """)
 
-# 탭(Tab) 기능 도입: 생성화면과 히스토리 화면 분리
 tab1, tab2 = st.tabs(["🚀 기획안 생성하기", "📚 지난 기획안 히스토리"])
 
 # ==========================================
@@ -84,8 +81,21 @@ with tab1:
     agenda_input = st.text_area("🎯 이번 주 기획 아젠다 & 고민", 
                                 "예: 타이중 노선의 비싼 항공료와 타이베이 이동의 비효율성 때문에 판매가 저조함. 이 비싼 항공료를 감수하고서라도 타이중을 방문할 타겟을 찾고 상품을 기획해줘.")
     keyword_input = st.text_input("🔍 검색할 타겟 키워드 (쉼표로 구분)", "타이중 핫플, 심계신촌, 타이중 감성숙소")
+    
+    # 👉 [핵심 추가] 카테고리 다중 선택 박스 추가!
+    product_options = ["패키지", "에어텔", "현지투어"]
+    selected_types = st.multiselect(
+        "🛍️ 기획할 상품 카테고리를 선택하세요 (다중 선택 가능)",
+        options=product_options,
+        default=["패키지"] # 기본값으로 패키지만 켜두거나, 3개 다 켜둘 수 있습니다.
+    )
 
     if st.button("✨ 데이터 수집 및 기획안 생성", type="primary"):
+        
+        if not selected_types:
+            st.warning("⚠️ 상품 카테고리를 최소 1개 이상 선택해 주세요!")
+            st.stop()
+            
         keywords = [k.strip() for k in keyword_input.split(",")]
         all_collected_data = ""
         
@@ -117,7 +127,6 @@ with tab1:
             # (인스타그램 하이브리드 수집)
             insta_count = 0
             if uploaded_file is not None:
-                st.success("✅ 업로드된 엑셀 파일에서 '좋아요' Top 10 게시물을 추출합니다!")
                 try:
                     df = pd.read_excel(uploaded_file)
                     if 'likesCount' in df.columns:
@@ -144,6 +153,15 @@ with tab1:
                 except Exception:
                     pass
 
+        # 👉 [핵심 추가] AI에게 지시할 '선택된 카테고리' 목록 만들기
+        proposal_instructions = ""
+        if "패키지" in selected_types:
+            proposal_instructions += "* **📦 [패키지] 기획안:** (상품명, 세부일정, 셀링포인트)\n"
+        if "에어텔" in selected_types:
+            proposal_instructions += "* **🏨 [에어텔] 기획안:** (상품명, 숙소 컨셉 등)\n"
+        if "현지투어" in selected_types:
+            proposal_instructions += "* **🚩 [현지투어] 기획안:** (상품명, 반나절 체험 등)\n"
+
         # (AI 기획안 분석)
         with st.spinner('방대한 데이터를 바탕으로 상세 기획안을 작성 중입니다...'):
             try:
@@ -156,26 +174,25 @@ with tab1:
                 [규칙]
                 1. 인스타 데이터에 [이미지주소]가 있다면 반드시 마크다운 `![이미지](이미지주소)`로 사진 렌더링.
                 2. 문장 끝에 반드시 [👉출처보기](링크) 달기.
+                3. 사용자가 요청한 카테고리 기획안만 작성하고, 요청하지 않은 카테고리는 절대 작성하지 말 것.
 
                 # 🚨 🎯 트렌드 분석 및 타겟 맞춤 기획 리포트
                 ## 1. 🔍 타겟 페르소나 및 핵심 니즈
                 * **핵심 타겟층:** (분석 결과)
                 * **시각적 특징:** (인스타 반응을 바탕으로 서술)
 
-                ## 2. 💡 3대 판매 채널 맞춤 기획안 (Proposal)
-                * **📦 [패키지] 기획안:** (상품명, 세부일정, 셀링포인트)
-                * **🏨 [에어텔] 기획안:** (상품명, 숙소 컨셉 등)
-                * **🚩 [현지투어] 기획안:** (상품명, 반나절 체험 등)
+                ## 2. 💡 선택형 맞춤 기획안 (Proposal)
+                {proposal_instructions}
 
                 ## 3. 📸 핵심 비주얼 및 레퍼런스
                 * (사진 2~3장 및 주요 링크)
                 """
                 response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                 
-                # 👉 요청 4: 성공적으로 기획안이 나오면 히스토리에 자동 저장!
-                save_history(agenda_input, keyword_input, response.text)
+                # 히스토리에 선택한 카테고리 정보도 함께 저장!
+                save_history(agenda_input, keyword_input, selected_types, response.text)
                 
-                st.success("🎉 기획안 생성이 완료되었습니다! (히스토리에 자동 저장되었습니다)")
+                st.success(f"🎉 기획안 생성이 완료되었습니다! (선택된 카테고리: {', '.join(selected_types)})")
                 st.markdown(response.text)
             except Exception as e:
                 st.error(f"AI 에러: {e}")
@@ -193,7 +210,8 @@ with tab2:
         st.info("아직 생성된 기획안 히스토리가 없습니다. 첫 번째 기획안을 만들어보세요!")
     else:
         for item in history_data:
-            with st.expander(f"🕒 {item['time']} | 🎯 아젠다: {item['agenda'][:30]}..."):
+            # 제목에 어떤 카테고리로 뽑았는지 표시해 줍니다.
+            with st.expander(f"🕒 {item['time']} | 🏷️ [{item.get('types', '전체')}] | 🎯 아젠다: {item['agenda'][:25]}..."):
                 st.markdown(f"**🔍 검색 키워드:** {item['keywords']}")
                 st.markdown("---")
                 st.markdown(item['result'])
