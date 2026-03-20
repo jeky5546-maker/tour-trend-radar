@@ -51,7 +51,7 @@ def save_to_gsheet(agenda, keywords, product_types, result):
         sheet.append_row(new_row)
         return True
     except Exception as e:
-        print(f"구글 시트 저장 실패 원인: {e}") # 개발자 확인용 에러 출력
+        st.error(f"🚨 삐빅! 구글 시트 에러 발생: {e}") # 👈 화면에 빨간색으로 진짜 원인을 띄워줍니다!
         return False
 
 # ==========================================
