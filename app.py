@@ -11,7 +11,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ==========================================
-# 🎨 1. 웹 페이지 기본 세팅 (범용적이고 전문적인 타이틀)
+# 🎨 1. 웹 페이지 기본 세팅
 # ==========================================
 st.set_page_config(page_title="트렌드 크롤러 & 인사이트 레이더", page_icon="🌎", layout="wide")
 
@@ -58,7 +58,6 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
     keywords = [k.strip() for k in keywords_str.split(",")]
     all_collected_data = ""
     
-    # 🟢 네이버: 검색어 기반 상위 20개 게시물의 제목 + 본문 텍스트 요약
     headers_naver = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
     for keyword in keywords[:3]:
         url = f"https://openapi.naver.com/v1/search/blog.json?query={keyword}&display=20&sort=sim"
@@ -69,7 +68,6 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
                 desc = re.sub(r'<[^>]*>', '', item['description'])
                 all_collected_data += f"[네이버] 제목:{title} | 내용:{desc} | 링크:{item['link']}\n"
                 
-    # 🔴 유튜브: 상위 5개 영상의 제목 + 하단 상세 설명글
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
         for keyword in keywords[:3]:
@@ -84,7 +82,6 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
     except Exception:
         pass
         
-    # 🟣 인스타그램: 좋아요 순위 기반 본문 텍스트 전체 + 핵심 해시태그 + 이미지
     insta_count = 0
     if uploaded_file is not None:
         try:
@@ -220,21 +217,35 @@ elif page_selection == "🛍️ 2. 여행상품기획 인사이트":
                 
             proposal_instructions = ""
             if "패키지" in selected_types: proposal_instructions += "* **📦 [패키지] 기획안:** (상품명, 세부일정, 핵심 셀링포인트)\n"
-            if "에어텔" in selected_types: proposal_instructions += "* **🏨 [에어텔] 기획안:** (상품명, 숙소 컨셉)\n"
-            if "현지투어" in selected_types: proposal_instructions += "* **🚩 [현지투어] 기획안:** (상품명, 반나절 체험)\n"
+            if "에어텔" in selected_types: proposal_instructions += "* **🏨 [에어텔] 기획안:** (상품명, 숙소 컨셉 및 특전)\n"
+            if "현지투어" in selected_types: proposal_instructions += "* **🚩 [현지투어] 기획안:** (상품명, 반나절 이색 체험 동선)\n"
 
             with st.spinner('세부 기획안을 작성 중입니다...'):
                 try:
                     client = genai.Client(api_key=GEMINI_API_KEY)
+                    # 💡 [핵심 복구 완료] 기획자님이 가장 만족하셨던 그 디테일한 프롬프트 포맷 그대로 복구했습니다!
                     prompt_prod = f"""
-                    당신은 전문 여행 상품 기획자입니다. 아젠다: "{agenda_input_prod}"
-                    [데이터] {collected_data_prod[:35000]}
-                    [규칙] 1. 사진 마크다운 렌더링. 2. [👉출처보기] 달기.
+                    당신은 데이터 기반 글로벌 여행 상품 기획자입니다. 아젠다: "{agenda_input_prod}"
+                    
+                    [데이터] 
+                    {collected_data_prod[:35000]}
+                    
+                    [규칙] 
+                    1. 인스타 데이터에 [이미지] 주소가 있다면 반드시 마크다운 `![이미지](주소)`로 사진을 화면에 렌더링하세요.
+                    2. 주장을 뒷받침할 때는 반드시 문장 끝에 [👉출처보기](링크) 를 달아주세요.
+                    3. 사용자가 요청한 아래 카테고리에 대해서만 작성하고, 요청하지 않은 카테고리는 절대 작성하지 마세요.
 
-                    ## 1. 🔍 타겟 페르소나
-                    ## 2. 💡 선택형 맞춤 기획안
+                    # 🚨 🎯 트렌드 분석 및 타겟 맞춤 기획 리포트
+                    
+                    ## 1. 🔍 타겟 페르소나 및 핵심 니즈
+                    * **핵심 타겟층:** (데이터 기반 분석 결과)
+                    * **시각적 특징:** (SNS 반응을 바탕으로 한 비주얼/감성 포인트)
+
+                    ## 2. 💡 선택형 맞춤 기획안 (Proposal)
                     {proposal_instructions}
-                    ## 3. 📸 핵심 비주얼
+                    
+                    ## 3. 📸 핵심 비주얼 및 레퍼런스
+                    * (수집된 핫플 사진 2~3장 및 주요 링크)
                     """
                     response_prod = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_prod)
                     
