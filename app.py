@@ -30,7 +30,26 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1_m9PHMY3E6bUKys915fGPdDKzMM
 # ==========================================
 # 💾 3. 공통 함수 (구글 시트 저장 & 딥 크롤링 엔진)
 # ==========================================
-def save_to_gsheet(agenda, keywords, product_types, result):
+
+# 💡 [NEW] 입력된 텍스트에서 국가와 도시만 0.5초 만에 빼내는 미니 AI 함수
+def extract_location(text):
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = f"""
+        다음 여행 기획 텍스트에서 목적지의 '국가명'과 '도시명'을 쉼표로 구분해서 딱 2단어만 출력해.
+        텍스트: {text}
+        출력예시: 대만,타이중
+        """
+        res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        data = res.text.replace(" ", "").strip().split(",")
+        if len(data) >= 2:
+            return data[0], data[1]
+        return "미상", "미상"
+    except Exception:
+        return "미상", "미상"
+
+# 💡 구글 시트 저장 함수 (국가, 도시 파라미터 추가 및 날짜 형식 변경)
+def save_to_gsheet(agenda, keywords, product_types, result, country, city):
     try:
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         gcp_info = json.loads(st.secrets["GCP_JSON"])
@@ -40,8 +59,11 @@ def save_to_gsheet(agenda, keywords, product_types, result):
         
         type_str = ", ".join(product_types) if isinstance(product_types, list) else product_types
         
+        # 날짜 포맷 YYYYMMDD로 변경 및 국가, 도시 컬럼 추가
         new_row = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now().strftime("%Y%m%d"), # 💡 YYYYMMDD 형식으로 변경 완료!
+            country,                           # 💡 추출된 국가
+            city,                              # 💡 추출된 도시
             agenda,
             keywords,
             type_str,
@@ -53,7 +75,7 @@ def save_to_gsheet(agenda, keywords, product_types, result):
         st.error(f"🚨 삐빅! 구글 시트 에러 발생: {e}")
         return False
 
-# 💡 딥 크롤링(Deep Crawling) 엔진
+# 딥 크롤링(Deep Crawling) 엔진 (기존과 동일)
 def gather_deep_sns_data(keywords_str, uploaded_file):
     keywords = [k.strip() for k in keywords_str.split(",")]
     all_collected_data = ""
@@ -187,7 +209,9 @@ if page_selection == "📈 1. 지역별 마케팅 인사이트":
                 """
                 response_mkt = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_mkt)
                 
-                save_to_gsheet(agenda_input_mkt, keyword_input_mkt, "Phase 2: 마케팅 리포트", response_mkt.text)
+                # 💡 구글 시트 저장 전, 아젠다와 키워드를 바탕으로 국가/도시 추출
+                country, city = extract_location(agenda_input_mkt + " " + keyword_input_mkt)
+                save_to_gsheet(agenda_input_mkt, keyword_input_mkt, "Phase 2: 마케팅 리포트", response_mkt.text, country, city)
                 
                 st.success("🎉 캠페인 마케팅 인사이트 리포트가 완성되어 구글 시트에 적재되었습니다!")
                 st.markdown(response_mkt.text)
@@ -223,7 +247,6 @@ elif page_selection == "🛍️ 2. 여행상품기획 인사이트":
             with st.spinner('세부 기획안을 작성 중입니다...'):
                 try:
                     client = genai.Client(api_key=GEMINI_API_KEY)
-                    # 💡 [핵심 복구 완료] 기획자님이 가장 만족하셨던 그 디테일한 프롬프트 포맷 그대로 복구했습니다!
                     prompt_prod = f"""
                     당신은 데이터 기반 글로벌 여행 상품 기획자입니다. 아젠다: "{agenda_input_prod}"
                     
@@ -231,7 +254,7 @@ elif page_selection == "🛍️ 2. 여행상품기획 인사이트":
                     {collected_data_prod[:35000]}
                     
                     [규칙] 
-                    1. 인스타 데이터에 [이미지] 주소가 있다면 반드시 마크다운 `![이미지](주소)`로 사진을 화면에 렌더링하세요.
+                    1. 인스타 데이터에 [이미지주소]가 있다면 반드시 마크다운 `![이미지](주소)`로 사진을 화면에 렌더링하세요.
                     2. 주장을 뒷받침할 때는 반드시 문장 끝에 [👉출처보기](링크) 를 달아주세요.
                     3. 사용자가 요청한 아래 카테고리에 대해서만 작성하고, 요청하지 않은 카테고리는 절대 작성하지 마세요.
 
@@ -249,7 +272,9 @@ elif page_selection == "🛍️ 2. 여행상품기획 인사이트":
                     """
                     response_prod = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_prod)
                     
-                    save_to_gsheet(agenda_input_prod, keyword_input_prod, selected_types, response_prod.text)
+                    # 💡 구글 시트 저장 전, 아젠다와 키워드를 바탕으로 국가/도시 추출
+                    country, city = extract_location(agenda_input_prod + " " + keyword_input_prod)
+                    save_to_gsheet(agenda_input_prod, keyword_input_prod, selected_types, response_prod.text, country, city)
                     
                     st.success("🎉 세부 상품 기획안이 생성되어 구글 시트에 적재되었습니다!")
                     st.markdown(response_prod.text)
