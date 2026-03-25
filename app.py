@@ -31,7 +31,7 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1_m9PHMY3E6bUKys915fGPdDKzMM
 # 💾 3. 공통 함수 (구글 시트 저장 & 딥 크롤링 엔진)
 # ==========================================
 
-# 💡 [NEW] 입력된 텍스트에서 국가와 도시만 0.5초 만에 빼내는 미니 AI 함수
+# 💡 입력된 텍스트에서 국가와 도시만 추출하는 AI 함수
 def extract_location(text):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -48,8 +48,8 @@ def extract_location(text):
     except Exception:
         return "미상", "미상"
 
-# 💡 구글 시트 저장 함수 (국가, 도시 파라미터 추가 및 날짜 형식 변경)
-def save_to_gsheet(agenda, keywords, product_types, result, country, city):
+# 💡 구글 시트 저장 함수 (Raw 데이터 파라미터 추가!)
+def save_to_gsheet(agenda, keywords, product_types, result, country, city, raw_data):
     try:
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         gcp_info = json.loads(st.secrets["GCP_JSON"])
@@ -59,15 +59,15 @@ def save_to_gsheet(agenda, keywords, product_types, result, country, city):
         
         type_str = ", ".join(product_types) if isinstance(product_types, list) else product_types
         
-        # 날짜 포맷 YYYYMMDD로 변경 및 국가, 도시 컬럼 추가
         new_row = [
-            datetime.now().strftime("%Y%m%d"), # 💡 YYYYMMDD 형식으로 변경 완료!
-            country,                           # 💡 추출된 국가
-            city,                              # 💡 추출된 도시
-            agenda,
-            keywords,
-            type_str,
-            result
+            datetime.now().strftime("%Y%m%d"), # A열: 생성일시
+            country,                           # B열: 국가
+            city,                              # C열: 도시
+            agenda,                            # D열: 아젠다
+            keywords,                          # E열: 키워드
+            type_str,                          # F열: 선택카테고리
+            result,                            # G열: 기획안(인사이트) 결과
+            raw_data                           # 💡 H열: 수집된 Raw 데이터 전체 (추가!)
         ]
         sheet.append_row(new_row)
         return True
@@ -75,7 +75,7 @@ def save_to_gsheet(agenda, keywords, product_types, result, country, city):
         st.error(f"🚨 삐빅! 구글 시트 에러 발생: {e}")
         return False
 
-# 딥 크롤링(Deep Crawling) 엔진 (기존과 동일)
+# 딥 크롤링(Deep Crawling) 엔진
 def gather_deep_sns_data(keywords_str, uploaded_file):
     keywords = [k.strip() for k in keywords_str.split(",")]
     all_collected_data = ""
@@ -209,9 +209,9 @@ if page_selection == "📈 1. 지역별 마케팅 인사이트":
                 """
                 response_mkt = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_mkt)
                 
-                # 💡 구글 시트 저장 전, 아젠다와 키워드를 바탕으로 국가/도시 추출
                 country, city = extract_location(agenda_input_mkt + " " + keyword_input_mkt)
-                save_to_gsheet(agenda_input_mkt, keyword_input_mkt, "Phase 2: 마케팅 리포트", response_mkt.text, country, city)
+                # 💡 구글 시트 저장 시 collected_data(Raw 데이터)도 같이 넘겨줍니다!
+                save_to_gsheet(agenda_input_mkt, keyword_input_mkt, "Phase 2: 마케팅 리포트", response_mkt.text, country, city, collected_data)
                 
                 st.success("🎉 캠페인 마케팅 인사이트 리포트가 완성되어 구글 시트에 적재되었습니다!")
                 st.markdown(response_mkt.text)
@@ -272,9 +272,9 @@ elif page_selection == "🛍️ 2. 여행상품기획 인사이트":
                     """
                     response_prod = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_prod)
                     
-                    # 💡 구글 시트 저장 전, 아젠다와 키워드를 바탕으로 국가/도시 추출
                     country, city = extract_location(agenda_input_prod + " " + keyword_input_prod)
-                    save_to_gsheet(agenda_input_prod, keyword_input_prod, selected_types, response_prod.text, country, city)
+                    # 💡 구글 시트 저장 시 collected_data_prod(Raw 데이터)도 같이 넘겨줍니다!
+                    save_to_gsheet(agenda_input_prod, keyword_input_prod, selected_types, response_prod.text, country, city, collected_data_prod)
                     
                     st.success("🎉 세부 상품 기획안이 생성되어 구글 시트에 적재되었습니다!")
                     st.markdown(response_prod.text)
