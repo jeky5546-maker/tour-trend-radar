@@ -106,28 +106,34 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
                     y_out += f"[유튜브] {item['snippet']['title']} | 자막/대본:{tr_txt if tr_txt else full_desc} | 링크:https://youtu.be/{v_id}\n"
     except Exception as e: st.warning(f"유튜브 수집 주의: {e}")
 
-    # 🟣 3. 인스타그램 (최대 10개 추출 / 자동 검색 보강)
+   # 🟣 3. 인스타그램 (광고 본문 싹 버리고 오직 '이미지'만 수집!)
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
             for _, row in df.head(10).iterrows():
-                i_out += f"[인스타-엑셀] 본문:{str(row.get('text',''))[:4000]}\n"
+                # 텍스트는 무시하고 이미지 URL만 챙깁니다.
+                img_url = row.get('displayUrl') or row.get('imageUrl') or ""
+                if img_url:
+                    i_out += f"[인스타-엑셀] 이미지:{img_url}\n"
         except: pass
     else:
         try:
             api_c = ApifyClient(APIFY_TOKEN)
-            # 인스타 태그는 공백/특수문자 제거 필수
             insta_tags = [k.replace(" ","").replace("#","") for k in keywords[:2]]
-            st.info(f"📸 인스타 수집 시도 중: #{insta_tags}")
-            run = api_c.actor("apify/instagram-hashtag-scraper").call(run_input={"hashtags": insta_tags, "resultsLimit": 5})
+            st.info(f"📸 인스타 수집 시도 중 (이미지만 추출): #{insta_tags}")
+            
+            # 텍스트를 안 가져오니 가벼워서 Limit를 10개로 넉넉하게 늘렸습니다!
+            run = api_c.actor("apify/instagram-hashtag-scraper").call(run_input={"hashtags": insta_tags, "resultsLimit": 10})
             items = list(api_c.dataset(run["defaultDatasetId"]).iterate_items())
+            
             if not items:
                 st.warning(f"⚠️ 인스타 검색 결과가 없습니다. 키워드 확인: {insta_tags}")
             else:
                 for item in items:
-                    # 💡 caption 주머니 먼저 확인, 없으면 text, 둘 다 없으면 없음 표시!
-                    insta_text = item.get('caption') or item.get('text') or "(본문 없음/해시태그만 있음)"
-                    i_out += f"[인스타-자동] 본문:{str(insta_text)[:4000]} | 이미지:{item.get('displayUrl','')}\n"
+                    # 💡 쓰레기 본문(caption/text)은 아예 부르지도 않고 이미지 주소만 저장!
+                    img_url = item.get('displayUrl') or ""
+                    if img_url:
+                        i_out += f"[인스타-자동] 이미지:{img_url}\n"
         except Exception as e:
             st.error(f"인스타 에러: {e}")
             
