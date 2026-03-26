@@ -81,92 +81,77 @@ def save_to_gsheet(agenda, keywords, product_types, result, country, city, raw_d
         return False
 
 # 🚀 [끝판왕] 하이브리드 RAG 딥 크롤링 엔진
+# 💡 [진단용] 어디서 막혔는지 알려주는 디버깅 버전 함수
 def gather_deep_sns_data(keywords_str, uploaded_file):
     keywords = [k.strip() for k in keywords_str.split(",")]
     all_collected_data = ""
     
-    # 🟢 1. 네이버: 상위 5개는 모바일 우회로 본문 스틸! 나머지는 요약본
-    headers_naver = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
-    for keyword in keywords[:3]:
-        url = f"https://openapi.naver.com/v1/search/blog.json?query={keyword}&display=20&sort=sim"
-        res = requests.get(url, headers=headers_naver)
-        if res.status_code == 200:
-            items = res.json().get('items', [])
-            for i, item in enumerate(items):
-                title = re.sub(r'<[^>]*>', '', item['title'])
-                link = item['link']
-                desc = re.sub(r'<[^>]*>', '', item['description'])
-                
-                full_text = ""
-                # 상위 5개 블로그만 본문 스틸 시도 (IP 차단 방지)
-                if i < 5 and "blog.naver.com" in link:
-                    try:
-                        m_link = link.replace("blog.naver.com", "m.blog.naver.com") # 모바일 버전으로 우회
-                        m_res = requests.get(m_link, headers={"User-Agent": "Mozilla/5.0"})
-                        soup = BeautifulSoup(m_res.text, 'html.parser')
-                        body = soup.select_one('.se-main-container')
-                        if body:
-                            full_text = body.get_text(separator=' ', strip=True)[:3000] # 핵심 3000자만 추출
-                    except:
-                        pass
-                
-                if full_text:
-                    all_collected_data += f"[네이버-본문스틸] 제목:{title} | 찐본문:{full_text} | 링크:{link}\n"
-                else:
-                    all_collected_data += f"[네이버-요약본] 제목:{title} | 내용:{desc} | 링크:{link}\n"
-                
-    # 🔴 2. 유튜브: 영상 상세설명 + 진짜 말하는 대본(자막) 스틸!
+    # 🟢 1. 네이버 (정상 작동 중)
+    try:
+        headers_naver = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+        for keyword in keywords[:3]:
+            url = f"https://openapi.naver.com/v1/search/blog.json?query={keyword}&display=20&sort=sim"
+            res = requests.get(url, headers=headers_naver)
+            if res.status_code == 200:
+                items = res.json().get('items', [])
+                for i, item in enumerate(items):
+                    title = re.sub(r'<[^>]*>', '', item['title'])
+                    link = item['link']
+                    desc = re.sub(r'<[^>]*>', '', item['description'])
+                    full_text = ""
+                    if i < 5 and "blog.naver.com" in link:
+                        try:
+                            m_link = link.replace("blog.naver.com", "m.blog.naver.com")
+                            m_res = requests.get(m_link, headers={"User-Agent": "Mozilla/5.0"})
+                            soup = BeautifulSoup(m_res.text, 'html.parser')
+                            body = soup.select_one('.se-main-container')
+                            if body: full_text = body.get_text(separator=' ', strip=True)[:3000]
+                        except: pass
+                    if full_text: all_collected_data += f"[네이버-본문스틸] 제목:{title} | 내용:{full_text} | 링크:{link}\n"
+                    else: all_collected_data += f"[네이버-요약본] 제목:{title} | 내용:{desc} | 링크:{link}\n"
+    except Exception as e:
+        st.error(f"❌ 네이버 수집 중 에러: {e}")
+
+    # 🔴 2. 유튜브 (여기서 에러가 나는지 확인!)
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
         for keyword in keywords[:3]:
             request = youtube.search().list(q=keyword, part='snippet', type='video', maxResults=5, order='relevance')
             response = request.execute()
+            if not response.get('items'):
+                st.warning(f"⚠️ '{keyword}'에 대한 유튜브 검색 결과가 없습니다.")
             for item in response.get('items', []):
                 video_id = item.get('id', {}).get('videoId', '')
                 if video_id:
                     title = item['snippet']['title']
                     desc = item['snippet']['description'].replace('\n', ' ')
-                    
                     transcript_text = ""
                     try:
-                        # 한국어 자동 자막 통째로 가져오기
                         transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
-                        transcript_text = " ".join([t['text'] for t in transcript_list])[:4000] # 핵심 대본 4000자
-                    except:
-                        pass
-                    
-                    if transcript_text:
-                        all_collected_data += f"[유튜브-자막해킹] 제목:{title} | 상세설명:{desc} | 자막본문:{transcript_text} | 링크:https://www.youtube.com/watch?v={video_id}\n"
-                    else:
-                        all_collected_data += f"[유튜브-일반] 제목:{title} | 상세설명:{desc} | 링크:https://www.youtube.com/watch?v={video_id}\n"
-    except Exception:
-        pass
-        
-    # 🟣 3. 인스타그램: 글자 제한 없이 무제한 수집
-    insta_count = 0
-    if uploaded_file is not None:
-        try:
+                        transcript_text = " ".join([t['text'] for t in transcript_list])[:4000]
+                    except: pass
+                    if transcript_text: all_collected_data += f"[유튜브-자막해킹] 제목:{title} | 자막:{transcript_text} | 링크:https://www.youtube.com/watch?v={video_id}\n"
+                    else: all_collected_data += f"[유튜브-일반] 제목:{title} | 설명:{desc} | 링크:https://www.youtube.com/watch?v={video_id}\n"
+    except Exception as e:
+        st.error(f"❌ 유튜브 수집 중 에러: {e}") # 💡 여기서 에러가 뜨면 할당량 문제일 확률 99%!
+
+    # 🟣 3. 인스타그램
+    try:
+        if uploaded_file is not None:
             df = pd.read_excel(uploaded_file)
-            if 'likesCount' in df.columns:
-                df = df.sort_values(by='likesCount', ascending=False)
             for index, row in df.head(10).iterrows():
                 text = str(row.get('text', '')).replace('\n', ' ')
-                all_collected_data += f"[인스타] 좋아요:{row.get('likesCount', 0)} | 본문:{text} | 이미지:{row.get('displayUrl') or row.get('imageUrl')}\n"
-        except Exception:
-            pass
-    else:
-        try:
+                all_collected_data += f"[인스타-엑셀] 본문:{text}\n"
+        else:
             apify_client = ApifyClient(APIFY_TOKEN)
             insta_keywords = [k.replace(" ", "").replace("#", "") for k in keywords[:2]]
             run = apify_client.actor("apify/instagram-hashtag-scraper").call(run_input={"hashtags": insta_keywords, "resultsLimit": 5})
             for item in apify_client.dataset(run["defaultDatasetId"]).iterate_items():
-                if insta_count < 5:
-                    text = str(item.get("text", "")).replace('\n', ' ')
-                    all_collected_data += f"[인스타] 본문:{text} | 이미지:{item.get('displayUrl', '')}\n"
-                    insta_count += 1
-        except Exception:
-            pass
-            
+                text = str(item.get("text", "")).replace('\n', ' ')
+                all_collected_data += f"[인스타-자동] 본문:{text}\n"
+    except Exception as e:
+        st.error(f"❌ 인스타그램 수집 중 에러: {e}")
+
     return all_collected_data
 
 
