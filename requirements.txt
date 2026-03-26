@@ -5,3 +5,5 @@ apify-client
 pandas
 openpyxl
 gspread
+beautifulsoup4
+youtube-transcript-api
