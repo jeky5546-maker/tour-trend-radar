@@ -122,8 +122,10 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
             items = list(api_c.dataset(run["defaultDatasetId"]).iterate_items())
             if not items:
                 st.warning("⚠️ 인스타 검색 결과가 0건입니다. 키워드를 더 단순하게 입력해 보세요.")
-            for item in items:
-                i_out += f"[인스타-자동] 본문:{str(item.get('text',''))[:3500]} | 이미지:{item.get('displayUrl','')}\n"
+           for item in items:
+                # 💡 핵심 수정: caption 주머니를 먼저 확인하고, 없으면 text 주머니 확인!
+                insta_text = item.get('caption') or item.get('text') or "(본문 없음/해시태그만 있음)"
+                i_out += f"[인스타-자동] 본문:{str(insta_text)[:4000]} | 이미지:{item.get('displayUrl','')}\n"
         except Exception as e: st.error(f"인스타 에러: {e}")
             
     return n_out, y_out, i_out
