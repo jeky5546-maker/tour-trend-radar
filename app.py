@@ -106,27 +106,30 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
                     y_out += f"[유튜브] {item['snippet']['title']} | 자막/대본:{tr_txt if tr_txt else full_desc} | 링크:https://youtu.be/{v_id}\n"
     except Exception as e: st.warning(f"유튜브 수집 주의: {e}")
 
-    # 🟣 3. 인스타그램 (Apify 로그 표시 및 키워드 정제)
+    # 🟣 3. 인스타그램 (최대 10개 추출 / 자동 검색 보강)
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
             for _, row in df.head(10).iterrows():
-                i_out += f"[인스타-엑셀] 본문:{str(row.get('text',''))[:3500]}\n"
+                i_out += f"[인스타-엑셀] 본문:{str(row.get('text',''))[:4000]}\n"
         except: pass
     else:
         try:
             api_c = ApifyClient(APIFY_TOKEN)
+            # 인스타 태그는 공백/특수문자 제거 필수
             insta_tags = [k.replace(" ","").replace("#","") for k in keywords[:2]]
             st.info(f"📸 인스타 수집 시도 중: #{insta_tags}")
             run = api_c.actor("apify/instagram-hashtag-scraper").call(run_input={"hashtags": insta_tags, "resultsLimit": 5})
             items = list(api_c.dataset(run["defaultDatasetId"]).iterate_items())
             if not items:
-                st.warning("⚠️ 인스타 검색 결과가 0건입니다. 키워드를 더 단순하게 입력해 보세요.")
-           for item in items:
-                # 💡 핵심 수정: caption 주머니를 먼저 확인하고, 없으면 text 주머니 확인!
-                insta_text = item.get('caption') or item.get('text') or "(본문 없음/해시태그만 있음)"
-                i_out += f"[인스타-자동] 본문:{str(insta_text)[:4000]} | 이미지:{item.get('displayUrl','')}\n"
-        except Exception as e: st.error(f"인스타 에러: {e}")
+                st.warning(f"⚠️ 인스타 검색 결과가 없습니다. 키워드 확인: {insta_tags}")
+            else:
+                for item in items:
+                    # 💡 caption 주머니 먼저 확인, 없으면 text, 둘 다 없으면 없음 표시!
+                    insta_text = item.get('caption') or item.get('text') or "(본문 없음/해시태그만 있음)"
+                    i_out += f"[인스타-자동] 본문:{str(insta_text)[:4000]} | 이미지:{item.get('displayUrl','')}\n"
+        except Exception as e:
+            st.error(f"인스타 에러: {e}")
             
     return n_out, y_out, i_out
 
