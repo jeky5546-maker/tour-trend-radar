@@ -28,7 +28,7 @@ APIFY_TOKEN = st.secrets["APIFY_TOKEN"]
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1_m9PHMY3E6bUKys915fGPdDKzMMOUSN6bwsWCqc2YAs/edit?gid=0#gid=0"
 
 # ==========================================
-# 💾 3. 공통 함수 (분산 적재 & 강화된 수집 엔진)
+# 💾 3. 공통 함수
 # ==========================================
 
 def extract_location(text):
@@ -40,7 +40,8 @@ def extract_location(text):
         return (data[0], data[1]) if len(data) >= 2 else ("미상", "미상")
     except: return "미상", "미상"
 
-def save_to_gsheet(agenda, keywords, product_types, result, country, city, n_raw, y_raw, i_raw):
+# 💡 [핵심 변경] 리스트(배열)를 받아서 여러 줄(Row)로 쪼개서 넣는 저장 함수
+def save_to_gsheet(agenda, keywords, product_types, result, country, city, n_list, y_list, i_list):
     try:
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         gcp_info = json.loads(st.secrets["GCP_JSON"])
@@ -48,23 +49,44 @@ def save_to_gsheet(agenda, keywords, product_types, result, country, city, n_raw
         gc = gspread.authorize(credentials)
         sheet = gc.open_by_url(SHEET_URL).sheet1
         
-        new_row = [
-            datetime.now().strftime("%Y%m%d"), 
-            country, city, agenda, keywords, ", ".join(product_types), result,
-            n_raw[:40000], y_raw[:40000], i_raw[:40000] 
-        ]
-        sheet.append_row(new_row)
+        type_str = ", ".join(product_types) if isinstance(product_types, list) else product_types
+        
+        # 네이버, 유튜브, 인스타 중 가장 많이 수집된 개수를 찾음
+        max_len = max(len(n_list), len(y_list), len(i_list))
+        rows_to_insert = []
+        
+        for i in range(max_len):
+            # 각 채널별 데이터가 있으면 넣고, 없으면 빈칸 처리 (최대 35,000자 제한은 유지)
+            n_val = n_list[i][:35000] if i < len(n_list) else ""
+            y_val = y_list[i][:35000] if i < len(y_list) else ""
+            i_val = i_list[i][:35000] if i < len(i_list) else ""
+            
+            if i == 0:
+                # 첫 번째 줄에는 전체 기획안 결과와 기본 정보를 넣음
+                rows_to_insert.append([
+                    datetime.now().strftime("%Y%m%d"), country, city, agenda, keywords, type_str, result,
+                    n_val, y_val, i_val
+                ])
+            else:
+                # 두 번째 줄부터는 앞부분(A~G열)을 비워두고 H, I, J열(로우데이터)만 채움
+                rows_to_insert.append([
+                    "", "", "", "", "", "", "",
+                    n_val, y_val, i_val
+                ])
+                
+        # 준비된 여러 줄을 한 번에 구글 시트에 쏴줍니다!
+        sheet.append_rows(rows_to_insert)
         return True
     except Exception as e:
         st.error(f"🚨 저장 에러: {e}")
         return False
 
-# 🚀 [진짜 무제한 수집] 유튜브/인스타 로직 대폭 강화
+# 🚀 [수집 엔진 변경] 통짜 텍스트가 아니라 '리스트' 형태로 각각 담아서 반환
 def gather_deep_sns_data(keywords_str, uploaded_file):
     keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
-    n_out, y_out, i_out = "", "", ""
+    n_list, y_list, i_list = [], [], []
     
-    # 🟢 1. 네이버 (본문 스틸 성능 유지)
+    # 🟢 1. 네이버 
     headers_naver = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
     for kw in keywords[:2]:
         res = requests.get(f"https://openapi.naver.com/v1/search/blog.json?query={kw}&display=20&sort=sim", headers=headers_naver)
@@ -81,9 +103,10 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
                         body = soup.select_one('.se-main-container')
                         if body: f_txt = body.get_text(separator=' ', strip=True)[:3500]
                     except: pass
-                n_out += f"[네이버] {t} | 내용:{f_txt if f_txt else d} | 링크:{l}\n"
+                # 리스트에 개별 아이템으로 추가!
+                n_list.append(f"[네이버] {t} | 내용:{f_txt if f_txt else d} | 링크:{l}")
 
-    # 🔴 2. 유튜브 (요약본 짤림 방지: 상세설명 전체 가져오기 추가)
+    # 🔴 2. 유튜브 
     try:
         yt = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
         for kw in keywords[:2]:
@@ -91,7 +114,6 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
             for item in req.get('items', []):
                 v_id = item.get('id', {}).get('videoId', '')
                 if v_id:
-                    # 💡 중요: search()에서 주는 d는 요약본이므로, videos()를 다시 호출해 전체 상세설명을 가져옵니다.
                     v_info = yt.videos().list(part='snippet', id=v_id).execute()
                     full_desc = v_info['items'][0]['snippet']['description'].replace('\n', ' ') if v_info['items'] else "설명없음"
                     
@@ -103,44 +125,37 @@ def gather_deep_sns_data(keywords_str, uploaded_file):
                         tr_txt = " ".join([x['text'] for x in t_data.fetch()])[:6000]
                     except: tr_txt = ""
                     
-                    y_out += f"[유튜브] {item['snippet']['title']} | 자막/대본:{tr_txt if tr_txt else full_desc} | 링크:https://youtu.be/{v_id}\n"
+                    y_list.append(f"[유튜브] {item['snippet']['title']} | 자막/대본:{tr_txt if tr_txt else full_desc} | 링크:https://youtu.be/{v_id}")
     except Exception as e: st.warning(f"유튜브 수집 주의: {e}")
 
-   # 🟣 3. 인스타그램 (광고 본문 싹 버리고 오직 '이미지'만 수집!)
+    # 🟣 3. 인스타그램 (이미지 전용)
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
             for _, row in df.head(10).iterrows():
-                # 텍스트는 무시하고 이미지 URL만 챙깁니다.
                 img_url = row.get('displayUrl') or row.get('imageUrl') or ""
                 if img_url:
-                    i_out += f"[인스타-엑셀] 이미지:{img_url}\n"
+                    i_list.append(f"[인스타-엑셀] 이미지:{img_url}")
         except: pass
     else:
         try:
             api_c = ApifyClient(APIFY_TOKEN)
             insta_tags = [k.replace(" ","").replace("#","") for k in keywords[:2]]
             st.info(f"📸 인스타 수집 시도 중 (이미지만 추출): #{insta_tags}")
-            
-            # 텍스트를 안 가져오니 가벼워서 Limit를 10개로 넉넉하게 늘렸습니다!
             run = api_c.actor("apify/instagram-hashtag-scraper").call(run_input={"hashtags": insta_tags, "resultsLimit": 10})
             items = list(api_c.dataset(run["defaultDatasetId"]).iterate_items())
-            
             if not items:
-                st.warning(f"⚠️ 인스타 검색 결과가 없습니다. 키워드 확인: {insta_tags}")
-            else:
-                for item in items:
-                    # 💡 쓰레기 본문(caption/text)은 아예 부르지도 않고 이미지 주소만 저장!
-                    img_url = item.get('displayUrl') or ""
-                    if img_url:
-                        i_out += f"[인스타-자동] 이미지:{img_url}\n"
-        except Exception as e:
-            st.error(f"인스타 에러: {e}")
+                st.warning("⚠️ 인스타 검색 결과가 0건입니다. 키워드를 더 단순하게 입력해 보세요.")
+            for item in items:
+                img_url = item.get('displayUrl') or ""
+                if img_url:
+                    i_list.append(f"[인스타-자동] 이미지:{img_url}")
+        except Exception as e: st.error(f"인스타 에러: {e}")
             
-    return n_out, y_out, i_out
+    return n_list, y_list, i_list
 
 # ==========================================
-# 🎛️ 4. UI 로직 (상세 기준 안내 복구)
+# 🎛️ 4. UI 로직 
 # ==========================================
 st.sidebar.markdown("## 🧭 데이터 인사이트 추출 메뉴")
 page_selection = st.sidebar.radio("메뉴 선택", ["📈 1. 지역별 마케팅 인사이트", "🛍️ 2. 여행상품기획 인사이트"], label_visibility="collapsed")
@@ -151,29 +166,34 @@ with st.sidebar.expander("📸 인스타그램 엑셀 수동 업로드 (클릭)"
 # [페이지 1]
 if page_selection == "📈 1. 지역별 마케팅 인사이트":
     st.markdown("## 📈 지역별 캠페인 마케팅 인사이트")
-    
-    # 👉 수집 기준 안내 복구 (절대 삭제 금지!)
     with st.expander("ℹ️ 하이브리드 RAG 딥 크롤링 데이터 수집 기준 (필독)", expanded=True):
         st.markdown("""
         * **🟢 네이버 블로그 (최대 40개):** 상위 5개 본문 전체(4,000자) 스크래핑
         * **🔴 유튜브 영상 (최대 10개):** 제목 + **상세설명 전체** + **음성 자막 전체(6,000자)** 해킹
-        * **🟣 인스타그램 (최대 10개):** 인기 해시태그 게시물 **본문 전체** 수집
-        * **🧠 분석 엔진:** 약 10만 자 이상의 Raw 데이터를 AI가 교차 검증하여 인사이트 도출
+        * **🟣 인스타그램 (최대 10개):** 인기 해시태그 게시물 **이미지 URL**만 100% 추출
+        * **🧠 적재 방식:** 수집된 링크 개수만큼 구글 시트에 '개별 행(Row)'으로 쪼개서 분산 저장
         """)
 
     agenda = st.text_area("🎯 캠페인 목적", "예: 대만 타이중 노선 탑승률 증대를 위한 2030 타겟 프로모션")
     keyword = st.text_input("🔍 핵심 키워드 (쉼표 구분)", "타이중핫플, 타이중여행")
 
     if st.button("📊 심층 리포트 생성", type="primary"):
-        with st.spinner('딥 데이터를 수집하고 요약 중입니다 (약 1~2분)...'):
-            n_raw, y_raw, i_raw = gather_deep_sns_data(keyword, uploaded_file)
+        with st.spinner('데이터를 수집하고 요약 중입니다 (약 1~2분)...'):
+            # 통짜 텍스트가 아닌 '리스트' 형태로 받아옵니다.
+            n_list, y_list, i_list = gather_deep_sns_data(keyword, uploaded_file)
+            
+            # AI 분석용 프롬프트를 위해 리스트를 다시 하나의 긴 글로 합쳐줍니다.
+            total_raw_text = "\n".join(n_list) + "\n" + "\n".join(y_list) + "\n" + "\n".join(i_list)
+            
             try:
                 client = genai.Client(api_key=GEMINI_API_KEY)
-                prompt = f"당신은 시니어 마케터입니다. [목적]:{agenda} [데이터]:{(n_raw+y_raw+i_raw)[:45000]}\n\n# 📊 리포트\n## 1. 🎯 타겟 페르소나 Top 3\n## 2. 💬 후킹 메시지 Top 5\n## 3. 🛍️ 전시 가이드\n## 4. 📸 비주얼 레퍼런스"
+                prompt = f"당신은 시니어 마케터입니다. [목적]:{agenda} [데이터]:{total_raw_text[:45000]}\n\n# 📊 리포트\n## 1. 🎯 타겟 페르소나 Top 3\n## 2. 💬 후킹 메시지 Top 5\n## 3. 🛍️ 전시 가이드\n## 4. 📸 비주얼 레퍼런스"
                 res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                 c, city = extract_location(agenda + " " + keyword)
-                save_to_gsheet(agenda, keyword, ["마케팅 리포트"], res.text, c, city, n_raw, y_raw, i_raw)
-                st.success("🎉 리포트 완성 및 구글 시트 저장 완료!")
+                
+                # 시트 저장 함수에는 쪼개진 리스트 원본을 그대로 넘깁니다!
+                save_to_gsheet(agenda, keyword, ["마케팅 리포트"], res.text, c, city, n_list, y_list, i_list)
+                st.success("🎉 리포트 완성 및 구글 시트 개별 행(Row) 저장 완료!")
                 st.markdown(res.text)
             except Exception as e: st.error(f"에러: {e}")
 
@@ -181,7 +201,7 @@ if page_selection == "📈 1. 지역별 마케팅 인사이트":
 else:
     st.markdown("## 🛍️ 여행상품기획 인사이트")
     with st.expander("ℹ️ 데이터 수집 기준 상세 안내", expanded=False):
-        st.markdown("* **네이버:** 상위 본문 스틸  \n* **유튜브:** 자막 및 상세설명 전체 스틸  \n* **인스타:** 인기 게시물 본문 전체")
+        st.markdown("* **네이버:** 상위 본문 스틸  \n* **유튜브:** 자막 및 상세설명 스틸  \n* **인스타:** 이미지 레퍼런스 스틸  \n* **적재:** 건별 행(Row) 분할 저장")
     
     agenda = st.text_area("🎯 세부 기획 아젠다", "예: 타이중 노선 2030 타겟 패키지 기획")
     keyword = st.text_input("🔍 검색 키워드", "타이중맛집, 타이중여행")
@@ -189,14 +209,15 @@ else:
 
     if st.button("✨ 기획안 생성", type="primary"):
         with st.spinner('딥 데이터를 분석 중입니다...'):
-            n_raw, y_raw, i_raw = gather_deep_sns_data(keyword, uploaded_file)
+            n_list, y_list, i_list = gather_deep_sns_data(keyword, uploaded_file)
+            total_raw_text = "\n".join(n_list) + "\n" + "\n".join(y_list) + "\n" + "\n".join(i_list)
             try:
                 client = genai.Client(api_key=GEMINI_API_KEY)
                 p_ins = "".join([f"* **{t} 기획안**\n" for t in types])
-                prompt = f"당신은 전문 상품 기획자입니다. [아젠다]:{agenda} [데이터]:{(n_raw+y_raw+i_raw)[:45000]}\n\n# 🚨 🎯 트렌드 분석 및 타겟 맞춤 기획 리포트\n## 1. 🔍 타겟 페르소나 및 니즈\n## 2. 💡 선택형 맞춤 기획안\n{p_ins}\n## 3. 📸 핵심 비주얼"
+                prompt = f"당신은 전문 상품 기획자입니다. [아젠다]:{agenda} [데이터]:{total_raw_text[:45000]}\n\n# 🚨 🎯 트렌드 분석 및 타겟 맞춤 기획 리포트\n## 1. 🔍 타겟 페르소나 및 니즈\n## 2. 💡 선택형 맞춤 기획안\n{p_ins}\n## 3. 📸 핵심 비주얼"
                 res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                 c, city = extract_location(agenda + " " + keyword)
-                save_to_gsheet(agenda, keyword, types, res.text, c, city, n_raw, y_raw, i_raw)
-                st.success("🎉 기획안 완성 및 구글 시트 저장 완료!")
+                save_to_gsheet(agenda, keyword, types, res.text, c, city, n_list, y_list, i_list)
+                st.success("🎉 기획안 완성 및 구글 시트 개별 행(Row) 저장 완료!")
                 st.markdown(res.text)
             except Exception as e: st.error(f"에러: {e}")
